@@ -1,7 +1,15 @@
 [package]
-name = "flint"
+name = "flintdb"
 version = "0.1.0"
 edition = "2024"
+authors = ["Alex Holmes <alex@sed.dev>"]
+license = "MIT OR Apache-2.0"
+description = "A lighter SQLite"
+repository = "https://github.com/alexhholmes/flint"
+keywords = ["flint", "flintdb", "sqlite", "sql", "database"]
+categories = ["database"]
+readme = "README.md"
+
 
 [features]
 sqlx = ["dep:sqlx"]

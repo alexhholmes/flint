@@ -4,7 +4,6 @@ pub struct Rows {
     rows: Vec<Vec<Value>>,
     index: usize,
 }
-
 impl Rows {
     pub(crate) fn new(rows: Vec<Vec<Value>>) -> Self {
         Rows { rows, index: 0 }

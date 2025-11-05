@@ -14,6 +14,7 @@ mod error;
 mod params;
 mod rows;
 mod db;
+mod io;
 
 /// Database handle - owns the file and shared state.
 /// Cheap to clone (uses Arc internally).
