@@ -1,4 +1,6 @@
 use sqlparser::ast::Statement;
+use tracing::debug;
+
 use crate::executor::error::ExecutorError;
 
 #[derive(Debug)]
@@ -11,10 +13,21 @@ pub enum Plan {
 }
 
 pub fn plan(stmt: &Statement) -> Result<Plan, ExecutorError> {
-    match stmt {
-        Statement::StartTransaction { .. } => Ok(Plan::StartTransaction),
-        Statement::Rollback { .. } => Ok(Plan::Rollback),
-        Statement::Commit { .. } => Ok(Plan::Commit),
+    debug!("planning statement");
+
+    let result = match stmt {
+        Statement::StartTransaction { .. } => {
+            debug!("plan: start transaction");
+            Ok(Plan::StartTransaction)
+        }
+        Statement::Rollback { .. } => {
+            debug!("plan: rollback");
+            Ok(Plan::Rollback)
+        }
+        Statement::Commit { .. } => {
+            debug!("plan: commit");
+            Ok(Plan::Commit)
+        }
         Statement::Query(query) => {
             // Check if it's "SELECT 1"
             if let sqlparser::ast::SetExpr::Select(select) = &*query.body {
@@ -23,6 +36,7 @@ pub fn plan(stmt: &Statement) -> Result<Plan, ExecutorError> {
                         if let sqlparser::ast::Expr::Value(val) = expr {
                             if let sqlparser::ast::Value::Number(n, _) = &val.value {
                                 if n == "1" && select.from.is_empty() {
+                                    debug!("plan: select one");
                                     return Ok(Plan::SelectOne);
                                 }
                             }
@@ -30,8 +44,14 @@ pub fn plan(stmt: &Statement) -> Result<Plan, ExecutorError> {
                     }
                 }
             }
+            debug!("plan: unsupported query");
             Ok(Plan::Unsupported("Only SELECT 1 is supported".to_string()))
         }
-        _ => Ok(Plan::Unsupported(format!("Unsupported statement: {:?}", stmt))),
-    }
+        _ => {
+            debug!("plan: unsupported statement");
+            Ok(Plan::Unsupported(format!("Unsupported statement: {:?}", stmt)))
+        }
+    };
+
+    result
 }

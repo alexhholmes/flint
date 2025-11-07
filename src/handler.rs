@@ -7,6 +7,8 @@ use pgwire::api::query::SimpleQueryHandler;
 use pgwire::api::results::Response;
 use pgwire::error::PgWireResult;
 use pgwire::messages::PgWireBackendMessage;
+use tracing::{info, span, Level};
+use ulid::Ulid;
 
 use crate::executor::Executor;
 
@@ -39,13 +41,18 @@ struct Handler {
 
 #[async_trait]
 impl SimpleQueryHandler for Handler {
-    async fn do_query<C>(&self, _client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
+    async fn do_query<C>(&self, client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
     where
         C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
         C::Error: Debug,
         pgwire::error::PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        println!("Received query: {:?}", query);
+        let query_id = Ulid::new();
+        let client_addr = client.socket_addr();
+        let span = span!(Level::INFO, "query", query_id = %query_id, client_addr = %client_addr);
+        let _enter = span.enter();
+
+        info!(query = %query, "received query");
         self.executor.execute(query).map_err(|e| e.into())
     }
 }

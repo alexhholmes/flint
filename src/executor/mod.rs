@@ -4,6 +4,7 @@ use std::sync::Arc;
 use futures::stream;
 use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response, Tag};
 use pgwire::api::Type;
+use tracing::{debug, info, span, Level};
 
 use crate::executor::error::ExecutorError;
 use crate::planner::{self, Plan};
@@ -21,19 +22,27 @@ impl Executor {
     }
 
     pub fn execute(&self, query: &str) -> Result<Vec<Response>> {
+        debug!("parsing query");
         let stmts = parser::parse(query)?;
 
         if stmts.is_empty() {
+            debug!("empty query");
             return Ok(vec![Response::EmptyQuery]);
         }
 
+        info!(statement_count = stmts.len(), "parsed statements");
+
         let mut responses = Vec::new();
-        for stmt in stmts {
-            let plan = planner::plan(&stmt)?;
+        for (idx, stmt) in stmts.iter().enumerate() {
+            debug!(statement_idx = idx, "planning statement");
+            let plan = planner::plan(stmt)?;
+
+            debug!(statement_idx = idx, plan = ?plan, "executing plan");
             let response = self.execute_plan(plan)?;
             responses.push(response);
         }
 
+        info!(response_count = responses.len(), "execution complete");
         Ok(responses)
     }
 
