@@ -1,2 +1,5 @@
-# Flint
-A *lighter* SQLite
+# flint
+
+A *lighter* database
+
+## Architecture

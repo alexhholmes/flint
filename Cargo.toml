@@ -1,19 +1,24 @@
 [package]
 name = "flintdb"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Alex Holmes <alex@sed.dev>"]
 license = "MIT OR Apache-2.0"
-description = "A lighter SQLite"
+description = "A lighter database"
 repository = "https://github.com/alexhholmes/flint"
-keywords = ["flint", "flintdb", "sqlite", "sql", "database"]
+keywords = ["flint", "flintdb", "postgres", "sql", "oltp"]
 categories = ["database"]
 readme = "README.md"
 exclude = [".gitignore"]
 
-[features]
-sqlx = ["dep:sqlx"]
+[[bin]]
+name = "flint"
+path = "src/bin/flint.rs"
 
 [dependencies]
+libc = "0.2"
+pgwire = "0.35.0"
 sqlparser = "0.59.0"
-sqlx = { version = "0.8.6", optional = true }
+tokio = { version = "1.48.0", features = ["full"]}
+async-trait = "0.1.89"
+futures = "0.3.31"
