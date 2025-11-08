@@ -201,6 +201,7 @@ pub fn extract_create_table(stmt: &CreateTable) -> Result<(String, Schema), Exec
         columns.push(Column {
             name: col_name,
             data_type,
+            is_primary_key: false,
         });
     }
 

@@ -1,3 +1,5 @@
+use bincode::{Encode, Decode};
+
 /// Block size for I/O operations (64KB)
 pub const BLOCK_SIZE: usize = 64 * 1024;
 
@@ -23,7 +25,7 @@ pub type BlockId = u8;
 pub type SlotId = u16;
 
 /// Stable tuple address
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Encode, Decode)]
 pub struct TuplePointer {
     pub segment_id: SegmentId,
     pub block_id: BlockId,

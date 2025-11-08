@@ -242,6 +242,7 @@ impl Executor {
             columns.push(crate::types::Column {
                 name: format!("col{}", i),
                 data_type: crate::types::DataType::Int,
+                is_primary_key: false,
             });
         }
         Schema::new(columns)

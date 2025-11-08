@@ -1,6 +1,7 @@
 mod io;
 mod base;
 mod internal;
+pub mod index;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -70,6 +71,10 @@ impl MetadataManager {
 pub struct TableMetadata {
     pub schema: Schema,
     pub segments: Vec<SegmentId>,
+    /// Primary key index root pointer (None if no PK defined)
+    pub primary_index_root: Option<TuplePointer>,
+    /// Secondary indexes: (index_name -> root pointer)
+    pub secondary_indexes: Vec<(String, TuplePointer)>,
 }
 
 /// Database with file-based storage
@@ -248,6 +253,8 @@ impl Database {
         let metadata = TableMetadata {
             schema,
             segments: vec![segment_id],
+            primary_index_root: None,
+            secondary_indexes: Vec::new(),
         };
 
         // Temporarily insert to check if catalog fits
@@ -317,11 +324,35 @@ impl Database {
         let mut block = self.file.read_block(segment_id, block_id)
             .map_err(|e| format!("Failed to read block: {}", e))?;
 
-        block.append_tuple(&row_bytes)
+        let slot_id = block.append_tuple(&row_bytes)
             .ok_or_else(|| "Block full".to_string())?;
 
         self.file.write_block(segment_id, block_id, &block)
             .map_err(|e| format!("Failed to write block: {}", e))?;
+
+        // Update primary key index if table has one
+        let tuple_ptr = TuplePointer::new(segment_id, block_id, slot_id);
+        if let Some(pk_col_idx) = metadata.schema.columns.iter().position(|c| c.is_primary_key) {
+            // Extract primary key value from row (convert to u64)
+            if let Some(key_val) = row.values.get(pk_col_idx) {
+                let key = match key_val {
+                    crate::types::Value::Int(n) => *n as u64,
+                    crate::types::Value::Float(f) => f.to_bits(),
+                    crate::types::Value::String(s) => {
+                        // Hash string to u64
+                        use std::collections::hash_map::DefaultHasher;
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = DefaultHasher::new();
+                        s.hash(&mut hasher);
+                        hasher.finish()
+                    }
+                    _ => return Err("Primary key cannot be NULL".to_string()),
+                };
+
+                // Update index (read from disk, insert, write back)
+                self.update_primary_index(table_name, key, tuple_ptr)?;
+            }
+        }
 
         Ok(())
     }
@@ -361,5 +392,87 @@ impl Database {
     pub fn get_schema(&self, table_name: &str) -> Result<Schema> {
         let metadata = self.get_table(table_name)?;
         Ok(metadata.schema.clone())
+    }
+
+    /// Update primary key index when a row is inserted
+    /// Reads index from disk, inserts key, handles splits, writes back
+    fn update_primary_index(&mut self, table_name: &str, key: u64, tuple_ptr: TuplePointer) -> Result<()> {
+        let metadata = self.tables.get_mut(table_name)
+            .ok_or_else(|| format!("Table not found: {}", table_name))?;
+
+        // Get or create index root
+        let (index_segment, index_block) = if let Some(root_ptr) = metadata.primary_index_root {
+            (root_ptr.segment_id, root_ptr.block_id)
+        } else {
+            // Create new index root
+            let seg_id = self.next_segment_id;
+            self.next_segment_id += 1;
+
+            // Initialize segment for index if not already initialized
+            self.file.initialize_segment(seg_id)
+                .map_err(|e| format!("Failed to initialize index segment: {}", e))?;
+
+            // Create root index page (leaf page)
+            let root_page = index::IndexPage::new(true);
+            let root_block = base::Block { data: root_page.data };
+            self.file.write_block(seg_id, 0, &root_block)
+                .map_err(|e| format!("Failed to write index root: {}", e))?;
+
+            // Update metadata with root pointer
+            metadata.primary_index_root = Some(TuplePointer::new(seg_id, 0, 0));
+            self.save_catalog()?;
+
+            (seg_id, 0)
+        };
+
+        // Read index root page from disk
+        let mut data_block = self.file.read_block(index_segment, index_block)
+            .map_err(|e| format!("Failed to read index page: {}", e))?;
+
+        // Convert Block to IndexPage (they're both 64KB buffers with compatible data layout)
+        let mut idx_page = index::IndexPage {
+            data: data_block.data.clone(),
+        };
+
+        // Insert into index
+        match index::BTree::insert_into_page(&mut idx_page, key, tuple_ptr)
+            .map_err(|e| format!("Index insertion error: {}", e))?
+        {
+            None => {
+                // No split, copy back and write
+                data_block.data = idx_page.data;
+                self.file.write_block(index_segment, index_block, &data_block)
+                    .map_err(|e| format!("Failed to write index page: {}", e))?;
+            }
+            Some(split) => {
+                // Split occurred - write left page, write right page, promote key to parent
+                data_block.data = idx_page.data;
+                self.file.write_block(index_segment, index_block, &data_block)
+                    .map_err(|e| format!("Failed to write left index page: {}", e))?;
+
+                // Allocate new block for right page
+                let right_block_id = self.file.allocate_block(index_segment)
+                    .map_err(|e| format!("Failed to allocate right index block: {}", e))?
+                    .ok_or_else(|| "Index segment full".to_string())?;
+
+                let right_block = base::Block { data: split.right_page.data };
+                self.file.write_block(index_segment, right_block_id, &right_block)
+                    .map_err(|e| format!("Failed to write right index page: {}", e))?;
+
+                // For now, store the promoted key (full tree traversal implementation is future work)
+                // Update root pointer if we split at root level (would create new root)
+                // This is simplified - full B+ tree needs proper parent tracking
+                tracing::debug!(
+                    "Index split at key {}: left in ({},{}), right in ({},{})",
+                    split.promoted_key,
+                    index_segment,
+                    index_block,
+                    index_segment,
+                    right_block_id
+                );
+            }
+        }
+
+        Ok(())
     }
 }

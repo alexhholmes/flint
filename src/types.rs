@@ -59,6 +59,7 @@ impl Row {
 pub struct Column {
     pub name: String,
     pub data_type: DataType,
+    pub is_primary_key: bool,
 }
 
 /// SQL data types
