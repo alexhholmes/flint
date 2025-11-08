@@ -3,12 +3,20 @@ mod base;
 mod internal;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU8, Ordering};
 use crate::types::{Row, Schema};
 use self::internal::DatabaseFile;
-use self::base::SegmentId;
+use self::base::{SegmentId, TuplePointer};
 use bincode::{Encode, Decode};
 
 pub type Result<T> = std::result::Result<T, String>;
+
+/// Compute simple checksum for metadata validation
+fn compute_checksum(data: &[u8]) -> u64 {
+    data.iter().fold(0u64, |acc, &byte| {
+        acc.wrapping_mul(31).wrapping_add(byte as u64)
+    })
+}
 
 /// Catalog header for metadata persistence
 #[derive(Debug, Clone, Encode, Decode)]
@@ -30,6 +38,33 @@ impl CatalogHeader {
     }
 }
 
+/// Metadata manager tracks active metadata segment (0 or 1) with atomic flip
+struct MetadataManager {
+    active_segment: AtomicU8,
+}
+
+impl MetadataManager {
+    fn new() -> Self {
+        MetadataManager {
+            active_segment: AtomicU8::new(0),
+        }
+    }
+
+    fn get_active(&self) -> u32 {
+        self.active_segment.load(Ordering::SeqCst) as u32
+    }
+
+    fn get_inactive(&self) -> u32 {
+        let active = self.active_segment.load(Ordering::SeqCst);
+        (1 - active) as u32
+    }
+
+    fn flip(&self) {
+        let current = self.active_segment.load(Ordering::SeqCst);
+        self.active_segment.store(1 - current, Ordering::SeqCst);
+    }
+}
+
 /// Table metadata
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct TableMetadata {
@@ -42,6 +77,7 @@ pub struct Database {
     file: DatabaseFile,
     tables: HashMap<String, TableMetadata>,
     next_segment_id: SegmentId,
+    metadata_mgr: MetadataManager,
 }
 
 impl Database {
@@ -52,32 +88,62 @@ impl Database {
         let mut db = Database {
             file,
             tables: HashMap::new(),
-            next_segment_id: 1, // segment 0 reserved for metadata
+            next_segment_id: 2, // segments 0,1 reserved for metadata
+            metadata_mgr: MetadataManager::new(),
         };
 
-        // Try to load existing metadata from segment 0
+        // Try to load existing metadata from active segment
         let _ = db.load_catalog();
 
         db
     }
 
-    /// Load catalog from segment 0
+    /// Load catalog from active metadata segment (0 or 1)
     fn load_catalog(&mut self) -> Result<()> {
-        // Read segment 0 header block
-        let header_block = self.file.read_block(0, 0)
-            .map_err(|e| format!("Failed to read catalog header: {}", e))?;
+        // Try to load from active segment first, fallback to inactive
+        let active = self.metadata_mgr.get_active();
+        let inactive = self.metadata_mgr.get_inactive();
 
-        // Deserialize catalog header from first part of block
+        match self.load_from_segment(active) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                // Try inactive segment as fallback
+                match self.load_from_segment(inactive) {
+                    Ok(()) => {
+                        // If we loaded from inactive, that means active was corrupted
+                        // Switch to inactive as the new active
+                        self.metadata_mgr.flip();
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+        }
+    }
+
+    /// Load catalog from specific metadata segment
+    fn load_from_segment(&mut self, segment_id: u32) -> Result<()> {
+        let header_block = self.file.read_block(segment_id, 0)
+            .map_err(|e| format!("Failed to read catalog from segment {}: {}", segment_id, e))?;
+
+        // Deserialize and validate checksum
         let (catalog, bytes_read): (CatalogHeader, usize) = bincode::decode_from_slice(&header_block.data, bincode::config::standard())
-            .map_err(|e| format!("Failed to decode catalog header: {}", e))?;
+            .map_err(|e| format!("Failed to decode catalog header from segment {}: {}", segment_id, e))?;
+
+        // Verify checksum (compute from metadata bytes)
+        let metadata_bytes = &header_block.data[bytes_read..];
+        let expected_checksum = compute_checksum(metadata_bytes);
+        if catalog.checksum != expected_checksum {
+            return Err(format!("Checksum mismatch in segment {}: expected {}, got {}",
+                segment_id, expected_checksum, catalog.checksum));
+        }
 
         // Load each table metadata
         let mut offset = bytes_read;
         for (table_name, _) in &catalog.table_offsets {
-            // Decode table metadata from segment 0 data area
             let metadata_bytes = &header_block.data[offset..];
             let (metadata, bytes_read): (TableMetadata, usize) = bincode::decode_from_slice(metadata_bytes, bincode::config::standard())
-                .map_err(|e| format!("Failed to decode table {}: {}", table_name, e))?;
+                .map_err(|e| format!("Failed to decode table {} from segment {}: {}", table_name, segment_id, e))?;
 
             self.tables.insert(table_name.clone(), metadata);
             offset += bytes_read;
@@ -120,7 +186,7 @@ impl Database {
         Ok(())
     }
 
-    /// Save catalog to segment 0
+    /// Save catalog to inactive metadata segment, fsync, then flip active segment
     fn save_catalog(&mut self) -> Result<()> {
         // Build catalog header
         let mut catalog = CatalogHeader::new();
@@ -138,27 +204,36 @@ impl Database {
         }
         catalog.table_offsets = offsets;
 
+        // Compute checksum of metadata bytes
+        catalog.checksum = compute_checksum(&metadata_bytes);
+
         // Encode catalog header
         let header_bytes = bincode::encode_to_vec(&catalog, bincode::config::standard())
             .map_err(|e| format!("Failed to encode catalog: {}", e))?;
 
-        // Write to segment 0
-        let mut block = self.file.read_block(0, 0)
-            .map_err(|e| format!("Failed to read block 0,0: {}", e))?;
+        // Get inactive segment for atomic write
+        let inactive_segment = self.metadata_mgr.get_inactive();
 
-        // Copy header and metadata into block
+        // Prepare block with header and metadata
         if header_bytes.len() + metadata_bytes.len() > base::BLOCK_SIZE {
             return Err(format!("Catalog too large: {} bytes (max {})",
                 header_bytes.len() + metadata_bytes.len(), base::BLOCK_SIZE));
         }
+
+        let mut block = self.file.read_block(inactive_segment, 0)
+            .map_err(|e| format!("Failed to read metadata block {}: {}", inactive_segment, e))?;
 
         // Clear block and write new data
         block.data.fill(0);
         block.data[..header_bytes.len()].copy_from_slice(&header_bytes);
         block.data[header_bytes.len()..header_bytes.len() + metadata_bytes.len()].copy_from_slice(&metadata_bytes);
 
-        self.file.write_block(0, 0, &block)
-            .map_err(|e| format!("Failed to write catalog: {}", e))?;
+        // Write to inactive segment
+        self.file.write_block(inactive_segment, 0, &block)
+            .map_err(|e| format!("Failed to write metadata block {}: {}", inactive_segment, e))?;
+
+        // After successful write, flip active segment pointer (atomic)
+        self.metadata_mgr.flip();
 
         Ok(())
     }

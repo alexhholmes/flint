@@ -110,11 +110,11 @@ impl DatabaseFile {
 
     /// Allocate a free block in segment
     pub fn allocate_block(&self, segment_id: SegmentId) -> Result<Option<BlockId>> {
-        // Segment 0 is reserved for catalog metadata
-        if segment_id == 0 {
+        // Segments 0 and 1 are reserved for metadata
+        if segment_id == 0 || segment_id == 1 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "Cannot allocate blocks in segment 0 (reserved for metadata)",
+                "Cannot allocate blocks in segments 0-1 (reserved for metadata)",
             ));
         }
 

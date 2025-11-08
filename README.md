@@ -64,3 +64,7 @@ Its dead slots and vacuumed and reused for new point updates.
                 ├─> Storage Engine (data)
                 └─> execute_plan(Plan, Storage) → Response
 ```
+
+## TODO
+- [ ] Support for variable length primary and secondary keys on indexes, currently
+  flint currently only supports fixed-length values.
