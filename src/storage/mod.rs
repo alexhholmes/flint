@@ -3,7 +3,6 @@ mod base;
 mod internal;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use crate::types::{Row, Schema};
 use self::internal::DatabaseFile;
 use self::base::{SegmentId, Block, TuplePointer};
@@ -115,7 +114,7 @@ impl Database {
                 .map_err(|e| format!("Failed to read segment header: {}", e))?;
 
             // Scan all used blocks
-            for block_id in 0..base::BLOCKS_PER_SEGMENT as u8 {
+            for block_id in 0..base::BLOCKS_PER_UNCOMPRESSED_SEGMENT as u8 {
                 if !header.is_block_free(block_id) {
                     let block = self.file.read_block(segment_id, block_id)
                         .map_err(|e| format!("Failed to read block: {}", e))?;

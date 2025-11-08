@@ -5,7 +5,7 @@ pub const BLOCK_SIZE: usize = 64 * 1024;
 pub const SEGMENT_SIZE: usize = 2 * 1024 * 1024;
 
 /// Number of blocks per segment (31 data blocks + 1 header block)
-pub const BLOCKS_PER_SEGMENT: usize = 31;
+pub const BLOCKS_PER_UNCOMPRESSED_SEGMENT: usize = 31;
 
 /// Segment header size (64KB)
 pub const SEGMENT_HEADER_SIZE: usize = BLOCK_SIZE;
@@ -99,18 +99,18 @@ impl SegmentHeader {
     }
 
     pub fn is_block_free(&self, block_id: BlockId) -> bool {
-        assert!(block_id < BLOCKS_PER_SEGMENT as u8);
+        assert!(block_id < BLOCKS_PER_UNCOMPRESSED_SEGMENT as u8);
         (self.block_free_bitmap & (1 << block_id)) != 0
     }
 
     pub fn mark_block_used(&mut self, block_id: BlockId) {
-        assert!(block_id < BLOCKS_PER_SEGMENT as u8);
+        assert!(block_id < BLOCKS_PER_UNCOMPRESSED_SEGMENT as u8);
         self.block_free_bitmap &= !(1 << block_id);
         self.blocks_used += 1;
     }
 
     pub fn mark_block_free(&mut self, block_id: BlockId) {
-        assert!(block_id < BLOCKS_PER_SEGMENT as u8);
+        assert!(block_id < BLOCKS_PER_UNCOMPRESSED_SEGMENT as u8);
         self.block_free_bitmap |= 1 << block_id;
         if self.blocks_used > 0 {
             self.blocks_used -= 1;

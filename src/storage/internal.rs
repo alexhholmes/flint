@@ -74,7 +74,7 @@ impl DatabaseFile {
 
     /// Read block (64KB) - atomic read unit
     pub fn read_block(&self, segment_id: SegmentId, block_id: BlockId) -> Result<Block> {
-        if block_id >= BLOCKS_PER_SEGMENT as u8 {
+        if block_id >= BLOCKS_PER_UNCOMPRESSED_SEGMENT as u8 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("block_id {} out of range", block_id),
@@ -90,7 +90,7 @@ impl DatabaseFile {
 
     /// Write block (64KB) - atomic write unit
     pub fn write_block(&self, segment_id: SegmentId, block_id: BlockId, block: &Block) -> Result<()> {
-        if block_id >= BLOCKS_PER_SEGMENT as u8 {
+        if block_id >= BLOCKS_PER_UNCOMPRESSED_SEGMENT as u8 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("block_id {} out of range", block_id),
@@ -113,7 +113,7 @@ impl DatabaseFile {
         let mut header = self.read_segment_header(segment_id)?;
 
         // Find first free block
-        for block_id in 0..BLOCKS_PER_SEGMENT as u8 {
+        for block_id in 0..BLOCKS_PER_UNCOMPRESSED_SEGMENT as u8 {
             if header.is_block_free(block_id) {
                 header.mark_block_used(block_id);
                 self.write_segment_header(segment_id, &header)?;
@@ -135,7 +135,7 @@ impl DatabaseFile {
     /// Read a single page (4KB) from uncompressed block
     /// Only use for uncompressed blocks - compressed blocks must read full block
     pub fn read_page(&self, segment_id: SegmentId, block_id: BlockId, page_id: u8) -> Result<Vec<u8>> {
-        if block_id >= BLOCKS_PER_SEGMENT as u8 {
+        if block_id >= BLOCKS_PER_UNCOMPRESSED_SEGMENT as u8 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("block_id {} out of range", block_id),
