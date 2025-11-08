@@ -1,5 +1,8 @@
+use serde::{Serialize, Deserialize};
+use bincode::{Encode, Decode};
+
 /// A single column value
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub enum Value {
     Null,
     Int(i64),
@@ -28,7 +31,7 @@ impl Value {
 }
 
 /// A single row (ordered list of values)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct Row {
     pub values: Vec<Value>,
 }
@@ -52,14 +55,14 @@ impl Row {
 }
 
 /// Column metadata
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 pub struct Column {
     pub name: String,
     pub data_type: DataType,
 }
 
 /// SQL data types
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum DataType {
     Int,
     Float,
@@ -69,7 +72,7 @@ pub enum DataType {
 }
 
 /// Table schema
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Encode, Decode)]
 pub struct Schema {
     pub columns: Vec<Column>,
 }

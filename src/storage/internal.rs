@@ -110,6 +110,14 @@ impl DatabaseFile {
 
     /// Allocate a free block in segment
     pub fn allocate_block(&self, segment_id: SegmentId) -> Result<Option<BlockId>> {
+        // Segment 0 is reserved for catalog metadata
+        if segment_id == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot allocate blocks in segment 0 (reserved for metadata)",
+            ));
+        }
+
         let mut header = self.read_segment_header(segment_id)?;
 
         // Find first free block

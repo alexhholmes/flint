@@ -71,9 +71,8 @@ impl Executor {
 
                     // Get the schema from the table
                     let db = self.db.read();
-                    let table = db.get_table(&table_name)
+                    let schema = db.get_schema(&table_name)
                         .map_err(|e| ExecutorError::Execution(e))?;
-                    let schema = table.schema.clone();
                     drop(db);
 
                     // Evaluate each row of expressions
@@ -122,10 +121,7 @@ impl Executor {
         // Get the actual schema for proper column naming
         let schema = if let Some(table_name) = table_name {
             let db = self.db.read();
-            match db.get_table(&table_name) {
-                Ok(table) => Some(table.schema.clone()),
-                Err(_) => None,
-            }
+            db.get_schema(&table_name).ok()
         } else {
             None
         };
@@ -183,10 +179,7 @@ impl Executor {
                 // Try to use actual table schema if available
                 let schema = if let Some(table_name) = &table_name {
                     let db = self.db.read();
-                    match db.get_table(table_name) {
-                        Ok(table) => table.schema.clone(),
-                        Err(_) => self.infer_schema(&rows),
-                    }
+                    db.get_schema(table_name).unwrap_or_else(|_| self.infer_schema(&rows))
                 } else {
                     self.infer_schema(&rows)
                 };
