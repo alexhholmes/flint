@@ -15,3 +15,19 @@ pub fn parse(query: &str) -> Result<Vec<Statement>, ExecutorError> {
             ExecutorError::Parse(format!("Parse error: {}", e))
         })
 }
+
+// TODO room for future implementation
+//
+// sqlparser-rs already handles
+// - tokenizations
+// - syntax validation
+// - AST construction
+// - dialect handling (postgres)
+//
+// This is just error conversion for our internal types and selecting the
+// postgres dialect.
+//
+// In the future we will need to add:
+// - custom syntax extensions
+// - query normalization
+// - macro expansion

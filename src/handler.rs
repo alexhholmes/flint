@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::sync::Arc;
+
 use async_trait::async_trait;
 use futures::Sink;
 use pgwire::api::{ClientInfo, ClientPortalStore, NoopHandler, PgWireServerHandlers};

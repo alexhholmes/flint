@@ -5,7 +5,7 @@ pub struct Config {
 
 impl Config {
     pub fn from_args() -> Self {
-        // TODO: Parse command-line arguments
+        // TODO: Parse command-line arguments or config file
         Config {
             bind_addr: "127.0.0.1".to_string(),
             port: 5432,
