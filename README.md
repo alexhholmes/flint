@@ -11,7 +11,8 @@ Use something like Cassandra or ScyllaDB if you need maximum write *throughput*
 and single denormalized tables (no JOINs) with sharding across nodes.
 
 If you do not fall within these two categories you may need to reconsider your
-schema requirements.
+schema requirements. Or, your usecase may fall into a third category requiring
+geographic writes. In this case explore Cockroach or Yugabyte databases.
 
 ## Architecture
 
