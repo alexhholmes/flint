@@ -28,8 +28,8 @@ impl BTree {
         // If key already exists, update it (replace old value)
         if found {
             let entry = IndexEntry::new(key, tuple_ptr);
-            let header_size = std::mem::size_of::<IndexPageHeader>();
-            let entry_size = std::mem::size_of::<IndexEntry>();
+            let header_size = size_of::<IndexPageHeader>();
+            let entry_size = size_of::<IndexEntry>();
             let offset = header_size + pos * entry_size;
 
             let entry_bytes = unsafe {

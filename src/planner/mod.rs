@@ -10,6 +10,12 @@ pub enum Operator {
     TableScan {
         table: String,
     },
+    /// Index scan for exact key lookup
+    IndexScan {
+        table: String,
+        column: String,
+        value: sqlparser::ast::Expr,
+    },
     /// Filter rows with a predicate
     Filter {
         input: Box<Operator>,
@@ -70,29 +76,47 @@ pub fn plan(stmt: &Statement) -> Result<Operator, ExecutorError> {
 fn plan_select(query: &sqlparser::ast::Query) -> Result<Operator, ExecutorError> {
     if let sqlparser::ast::SetExpr::Select(select) = &*query.body {
         // Start with TableScan if there's a FROM clause
-        let mut plan = if select.from.is_empty() {
+        let (mut plan, table_name_opt) = if select.from.is_empty() {
             // No FROM = constant expression (e.g., SELECT 1)
             debug!("plan: constant select (no FROM)");
-            Operator::TableScan {
+            (Operator::TableScan {
                 table: "__constant__".to_string(),
-            }
+            }, None)
         } else if select.from.len() == 1 {
             let table_name = extract_table_name(&select.from[0])?;
             debug!(table = %table_name, "plan: table scan");
-            Operator::TableScan { table: table_name }
+            (Operator::TableScan { table: table_name.clone() }, Some(table_name))
         } else {
             return Err(ExecutorError::UnsupportedStatement(
                 "Multiple tables not yet supported".to_string(),
             ));
         };
 
-        // Add WHERE filter if present
+        // Try to use IndexScan for equality predicates on primary key
         if let Some(selection) = &select.selection {
-            debug!("plan: adding filter");
-            plan = Operator::Filter {
-                input: Box::new(plan),
-                predicate: selection.clone(),
-            };
+            if let Some(table_name) = &table_name_opt {
+                // Check if selection is a simple equality (col = value)
+                if let Some((col_name, value_expr)) = try_extract_equality(selection) {
+                    debug!(column = %col_name, "plan: attempting index scan");
+                    plan = Operator::IndexScan {
+                        table: table_name.clone(),
+                        column: col_name,
+                        value: value_expr,
+                    };
+                } else {
+                    debug!("plan: adding filter (not index-able)");
+                    plan = Operator::Filter {
+                        input: Box::new(plan),
+                        predicate: selection.clone(),
+                    };
+                }
+            } else {
+                debug!("plan: adding filter");
+                plan = Operator::Filter {
+                    input: Box::new(plan),
+                    predicate: selection.clone(),
+                };
+            }
         }
 
         // Add projection (SELECT columns)
@@ -294,5 +318,27 @@ fn sql_type_to_data_type(data_type: &sqlparser::ast::DataType) -> Result<DataTyp
                 data_type
             )))
         }
+    }
+}
+
+/// Try to extract a simple equality predicate (col = value) from a WHERE clause
+/// Returns Some((column_name, value_expr)) if matched, None otherwise
+fn try_extract_equality(expr: &sqlparser::ast::Expr) -> Option<(String, sqlparser::ast::Expr)> {
+    use sqlparser::ast::{BinaryOperator, Expr};
+
+    match expr {
+        // Match: col = value
+        Expr::BinaryOp { left, op: BinaryOperator::Eq, right } => {
+            // Try left=Identifier, right=Value
+            if let Expr::Identifier(ident) = &**left {
+                return Some((ident.value.clone(), (**right).clone()));
+            }
+            // Try right=Identifier, left=Value (value = col)
+            if let Expr::Identifier(ident) = &**right {
+                return Some((ident.value.clone(), (**left).clone()));
+            }
+            None
+        }
+        _ => None,
     }
 }

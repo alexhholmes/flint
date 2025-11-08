@@ -4,7 +4,8 @@ mod internal;
 pub mod index;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, atomic::{AtomicU8, Ordering}};
+use parking_lot::Mutex;
 use crate::types::{Row, Schema};
 use self::internal::DatabaseFile;
 use self::base::{SegmentId, TuplePointer};
@@ -81,8 +82,11 @@ pub struct TableMetadata {
 pub struct Database {
     file: DatabaseFile,
     tables: HashMap<String, TableMetadata>,
-    next_segment_id: SegmentId,
+    next_segment_id: Mutex<SegmentId>,
     metadata_mgr: MetadataManager,
+    /// Per-table latches for serializing index modifications
+    /// TODO implement per-page latching for proper implementation
+    index_latches: HashMap<String, Arc<Mutex<()>>>,
 }
 
 impl Database {
@@ -93,8 +97,9 @@ impl Database {
         let mut db = Database {
             file,
             tables: HashMap::new(),
-            next_segment_id: 2, // segments 0,1 reserved for metadata
+            next_segment_id: Mutex::new(2), // segments 0,1 reserved for metadata
             metadata_mgr: MetadataManager::new(),
+            index_latches: HashMap::new(),
         };
 
         // Try to load existing metadata from active segment
@@ -156,7 +161,8 @@ impl Database {
             // Update next_segment_id based on highest segment seen
             if let Some(table) = self.tables.get(table_name) {
                 if let Some(&max_seg) = table.segments.iter().max() {
-                    self.next_segment_id = self.next_segment_id.max(max_seg + 1);
+                    let mut next_id = self.next_segment_id.lock();
+                    *next_id = next_id.max(max_seg + 1);
                 }
             }
         }
@@ -248,8 +254,15 @@ impl Database {
             return Err(format!("Table already exists: {}", name));
         }
 
-        // Pre-flight: check if new table would fit in catalog before modifying state
-        let segment_id = self.next_segment_id;
+        // Allocate and reserve segment ID atomically under lock
+        // This ensures no two concurrent creates get the same segment ID
+        let segment_id = {
+            let mut next_id = self.next_segment_id.lock();
+            let seg = *next_id;
+            *next_id += 1;  // Increment before releasing lock
+            seg
+        };  // Lock released here
+
         let metadata = TableMetadata {
             schema,
             segments: vec![segment_id],
@@ -265,10 +278,7 @@ impl Database {
             return Err(e);
         }
 
-        // Now proceed with actual initialization
-        self.next_segment_id += 1;
-
-        // Initialize segment
+        // Initialize segment on disk
         self.file.initialize_segment(segment_id)
             .map_err(|e| {
                 // Rollback on initialization failure
@@ -281,7 +291,8 @@ impl Database {
             .map_err(|e| {
                 // Rollback on persist failure
                 self.tables.remove(&name);
-                self.next_segment_id -= 1;
+                // NOTE: segment_id is now orphaned on disk (allocated but not in catalog)
+                // TODO Future: implement freelist to reclaim orphaned segments during recovery
                 e
             })?;
 
@@ -394,9 +405,28 @@ impl Database {
         Ok(metadata.schema.clone())
     }
 
+    /// Read a block from storage (for index/executor use)
+    pub fn read_block(&self, segment_id: u32, block_id: u8) -> Result<base::Block> {
+        self.file.read_block(segment_id, block_id)
+            .map_err(|e| format!("Failed to read block: {}", e))
+    }
+
     /// Update primary key index when a row is inserted
     /// Reads index from disk, inserts key, handles splits, writes back
+    /// Protected by per-table index latch for concurrent safety
     fn update_primary_index(&mut self, table_name: &str, key: u64, tuple_ptr: TuplePointer) -> Result<()> {
+        // Get or create latch for this table's index (must do before metadata access)
+        let index_latch = {
+            let latch = self.index_latches
+                .entry(table_name.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone();
+            latch
+        };
+
+        // Acquire latch for serialized index access
+        let _latch_guard = index_latch.lock();
+
         let metadata = self.tables.get_mut(table_name)
             .ok_or_else(|| format!("Table not found: {}", table_name))?;
 
@@ -404,9 +434,13 @@ impl Database {
         let (index_segment, index_block) = if let Some(root_ptr) = metadata.primary_index_root {
             (root_ptr.segment_id, root_ptr.block_id)
         } else {
-            // Create new index root
-            let seg_id = self.next_segment_id;
-            self.next_segment_id += 1;
+            // Allocate and reserve segment ID atomically under lock
+            let seg_id = {
+                let mut next_id = self.next_segment_id.lock();
+                let seg = *next_id;
+                *next_id += 1;  // Increment before releasing lock
+                seg
+            };  // Lock released here
 
             // Initialize segment for index if not already initialized
             self.file.initialize_segment(seg_id)
@@ -420,7 +454,12 @@ impl Database {
 
             // Update metadata with root pointer
             metadata.primary_index_root = Some(TuplePointer::new(seg_id, 0, 0));
-            self.save_catalog()?;
+            self.save_catalog()
+                .map_err(|e| {
+                    // NOTE: seg_id is now orphaned on disk (allocated but not in catalog)
+                    // TODO Future: implement freelist to reclaim orphaned segments during recovery
+                    e
+                })?;
 
             (seg_id, 0)
         };
@@ -474,5 +513,62 @@ impl Database {
         }
 
         Ok(())
+    }
+
+    /// Point lookup using primary index
+    /// Returns TuplePointer for exact key match, or None if not found
+    pub fn get_by_key(&self, table_name: &str, key: u64) -> Result<Option<TuplePointer>> {
+        let metadata = self.get_table(table_name)?;
+
+        // No index means no results
+        let root_ptr = metadata.primary_index_root
+            .ok_or_else(|| "No primary index available".to_string())?;
+
+        // Read root page from disk
+        let root_block = self.file.read_block(root_ptr.segment_id, root_ptr.block_id)
+            .map_err(|e| format!("Failed to read index page: {}", e))?;
+
+        // Convert Block to IndexPage
+        let root_page = index::IndexPage {
+            data: root_block.data,
+        };
+
+        // Perform point search on root page
+        // For now, the tree is single-level (root is always a leaf)
+        let result = index::BTree::search_page(&root_page, key)
+            .map_err(|e| format!("Index search error: {}", e))?;
+
+        Ok(result)
+    }
+
+    /// Range scan using primary index
+    /// Returns all TuplePointers for keys in [start_key, end_key]
+    pub fn range_scan_index(&self, table_name: &str, start_key: u64, end_key: u64) -> Result<Vec<TuplePointer>> {
+        let metadata = self.get_table(table_name)?;
+
+        // No index means no results
+        let root_ptr = metadata.primary_index_root
+            .ok_or_else(|| "No primary index available".to_string())?;
+
+        // Read root page from disk
+        let root_block = self.file.read_block(root_ptr.segment_id, root_ptr.block_id)
+            .map_err(|e| format!("Failed to read index page: {}", e))?;
+
+        // Convert Block to IndexPage
+        let root_page = index::IndexPage {
+            data: root_block.data,
+        };
+
+        // Perform range scan on root page
+        // For now, the tree is single-level (root is always a leaf)
+        let entries = index::BTree::range_scan_page(&root_page, start_key, end_key)
+            .map_err(|e| format!("Index range scan error: {}", e))?;
+
+        // Extract TuplePointers from entries
+        let pointers = entries.into_iter()
+            .map(|(_, ptr)| ptr)
+            .collect();
+
+        Ok(pointers)
     }
 }

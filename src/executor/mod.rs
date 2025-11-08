@@ -132,6 +132,7 @@ impl Executor {
     fn extract_table_name(&self, plan: &Operator) -> Option<String> {
         match plan {
             Operator::TableScan { table } if table != "__constant__" => Some(table.clone()),
+            Operator::IndexScan { table, .. } => Some(table.clone()),
             Operator::Filter { input, .. } => self.extract_table_name(input),
             Operator::Project { input, .. } => self.extract_table_name(input),
             Operator::Limit { input, .. } => self.extract_table_name(input),
@@ -145,6 +146,58 @@ impl Executor {
                 // Constant expression like SELECT 1
                 debug!("executing constant scan");
                 Ok(vec![Row::new(vec![Value::Int(1)])])
+            }
+            Operator::IndexScan { table, column: _, value } => {
+                debug!(table = %table, "executing index scan");
+                let db = self.db.read();
+
+                // Evaluate the value expression
+                let schema = db.get_schema(&table)
+                    .map_err(|e| ExecutorError::Execution(e))?;
+                let empty_row = Row::new(vec![]);
+                let lookup_val = evaluator::eval_expr(&value, &empty_row, &schema)?;
+
+                // Convert value to u64 key for index lookup
+                let key = match lookup_val {
+                    Value::Int(n) => n as u64,
+                    Value::Float(f) => f.to_bits(),
+                    Value::String(s) => {
+                        use std::collections::hash_map::DefaultHasher;
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = DefaultHasher::new();
+                        s.hash(&mut hasher);
+                        hasher.finish()
+                    }
+                    _ => return Err(ExecutorError::Execution("Cannot use NULL/Bool as index key".to_string())),
+                };
+
+                // Perform index lookup
+                match db.get_by_key(&table, key) {
+                    Ok(Some(tuple_ptr)) => {
+                        // Found by index - now fetch the actual row using the pointer
+                        let seg_id = tuple_ptr.segment_id;
+                        let block_id = tuple_ptr.block_id;
+                        let slot_id = tuple_ptr.slot_id;
+
+                        // Read the block and extract the row
+                        let block = db.read_block(seg_id, block_id)
+                            .map_err(|e| ExecutorError::Execution(e))?;
+
+                        if let Some(tuple_bytes) = block.read_tuple(slot_id) {
+                            let (row, _): (Row, usize) = bincode::decode_from_slice(tuple_bytes, bincode::config::standard())
+                                .map_err(|e| ExecutorError::Execution(format!("Deserialization error: {}", e)))?;
+                            Ok(vec![row])
+                        } else {
+                            Ok(Vec::new())
+                        }
+                    }
+                    Ok(None) => {
+                        // Not found in index
+                        debug!("key not found in index");
+                        Ok(Vec::new())
+                    }
+                    Err(e) => Err(ExecutorError::Execution(e)),
+                }
             }
             Operator::TableScan { table } => {
                 debug!(table = %table, "executing table scan");

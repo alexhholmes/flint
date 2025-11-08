@@ -11,9 +11,11 @@ Use something like Cassandra or ScyllaDB if you need maximum write *throughput*
 and single denormalized tables (no JOINs) with sharding across nodes.
 
 If you do not fall within these two categories you may need to reconsider your
-schema requirements. Or, your usecase may fall into a specialized categoires with
+schema requirements. Or, your usecase may fall into a specialized category with
 specific requirements. Geographic writes: Cockroach or Yubabyte, Analytics:
-Clickhouse or Timescale, or Flexible schema: MongoDB.
+Clickhouse, or Flexible schema: MongoDB. There are many more application
+specific databases, and you will likely know which to choose from if your
+requirements necessitate them.
 
 ## Architecture
 

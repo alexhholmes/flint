@@ -1,5 +1,6 @@
 pub mod page;
 pub mod btree;
+mod hash;
 
-pub use page::{IndexEntry, IndexPage, IndexPageHeader, INDEX_PAGE_SIZE};
-pub use btree::{BTree, InMemoryBTree, SplitResult};
+pub use page::IndexPage;
+pub use btree::BTree;
