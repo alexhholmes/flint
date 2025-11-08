@@ -54,6 +54,32 @@ the block are now always in at block-level granularity; reads and writes. A
 compressed block maintains the buffer space so it can continue to be mutable.
 Its dead slots and vacuumed and reused for new point updates.
 
+### Replication (future improvements)
+
+Standard deployment model is a single writer database with optional read replicas.
+This follows the common practice (used by Postgres) of streaming WAL changes to
+read replicas. This requires zero HA infrastructure and is the default solution
+for multi-instance deployments.
+
+### Failover and HA (future improvements)
+
+Optionally, failover with a lease-based, single writer deployment is available.
+With a single writer, Flint maintains the low-latency writes of the single-writer
+model while having the HA benefits of multi-master deployments. The cost is a
+brief amount of downtime and dropped queries (still much shorter of than
+alternatives such as Postgres + Patroni). This designates 3-5 nodes in a 
+membership Raft quorum, and it elects a primary write instance. (*MAYBE*) Each
+database (logical) is assigned a Raft group and can assign any of the nodes as
+the primary write instance. This distributes logical databases among the Flint
+instances for best write-throughput.
+
+What Flint is not. An "infinitely" scaling multi-master database. This meets
+the 95% of use-cases where you have single-node writing and storage scale, but
+want the option for simple to manage HA and read replication to meet read
+throughput demands. You get fast writes, HA, read scaling, and operational sanity
+at the cost of geographically dispersed local writes and storage scaling for
+single deployments.
+
 ## Source Layout
 ```
   Server
