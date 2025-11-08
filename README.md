@@ -2,6 +2,17 @@
 
 A *lighter* SQL database
 
+## Use case
+
+Use Flint if you need: low-latency writes of a single-writer database,
+high-availability, and read replication.
+
+Use something like Cassandra or ScyllaDB if you need maximum write *throughput*
+and single denormalized tables (no JOINs) with sharding across nodes.
+
+If you do not fall within these two categories you may need to reconsider your
+schema requirements.
+
 ## Architecture
 
 Flint follows a variation of the heap disk format that I've dubbed Log-structured
@@ -129,6 +140,6 @@ calculation.
                 └─> execute_plan(Plan, Storage) → Response
 ```
 
-## TODO
+## Todo
 - [ ] Support for variable length primary and secondary keys on indexes, currently
   flint currently only supports fixed-length values.
