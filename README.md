@@ -1,6 +1,6 @@
 # flint
 
-A *lighter* database
+A *lighter* SQL database
 
 ## Architecture
 
