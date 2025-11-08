@@ -11,6 +11,14 @@ categories = ["database"]
 readme = "README.md"
 exclude = [".gitignore"]
 
+[workspace]
+# All workspace members (core flintdb + extensions)
+# To add a new extension: add "contrib/<name>" to members list
+members = [
+    ".",
+    "contrib/point-ext",
+]
+
 [[bin]]
 name = "flint"
 path = "bin/flint.rs"
