@@ -4,15 +4,16 @@ A *lighter* SQL database
 
 ## Use case
 
-Use Flint if you need: low-latency writes of a single-writer SQL database,
-high-availability, and read replication.
+Use Flint if you need: OLTP with low-latency writes of a single-writer SQL 
+database, high-availability, and read replication.
 
 Use something like Cassandra or ScyllaDB if you need maximum write *throughput*
 and single denormalized tables (no JOINs) with sharding across nodes.
 
 If you do not fall within these two categories you may need to reconsider your
-schema requirements. Or, your usecase may fall into a third category requiring
-geographic writes. In this case explore Cockroach or Yugabyte databases.
+schema requirements. Or, your usecase may fall into a specialized categoires with
+specific requirements. Geographic writes: Cockroach or Yubabyte, Analytics:
+Clickhouse or Timescale, or Flexible schema: MongoDB.
 
 ## Architecture
 
