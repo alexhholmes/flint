@@ -1,9 +1,10 @@
 use std::io::{self, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use crate::storage::base::{Block, SegmentHeader, SEGMENT_SIZE, SEGMENT_HEADER_SIZE, BLOCK_SIZE, BLOCKS_PER_UNCOMPRESSED_SEGMENT};
+use crate::storage::base::{Block, BlockHeader, SegmentHeader, SEGMENT_SIZE, SEGMENT_HEADER_SIZE, BLOCK_SIZE, BLOCKS_PER_UNCOMPRESSED_SEGMENT};
 use crate::storage::io::{Disk, alloc_aligned};
 use crate::storage::base::PageId;
+use zerocopy::IntoBytes;
 
 const PAGE_SIZE: usize = 4096;
 
@@ -109,6 +110,18 @@ impl TableFile {
         Ok(())
     }
 
+    /// Create an initialized block with valid BlockHeader (safe via zerocopy)
+    fn create_initialized_block() -> Block {
+        let mut data = alloc_aligned(BLOCK_SIZE);
+        let header = BlockHeader::new();
+
+        // Write header to beginning of block using zerocopy's safe conversion
+        let header_bytes = header.as_bytes();
+        data[0..header_bytes.len()].copy_from_slice(header_bytes);
+
+        Block { data }
+    }
+
     /// Initialize a new segment
     pub fn initialize_segment(&self, segment_id: u32) -> Result<()> {
         let header = SegmentHeader::new(segment_id);
@@ -128,6 +141,11 @@ impl TableFile {
             if header.is_block_free(block_id) {
                 header.mark_block_used(block_id);
                 self.write_segment_header(segment_id, &header)?;
+
+                // Initialize the block on disk with valid header
+                let initialized_block = Self::create_initialized_block();
+                self.write_block(segment_id, block_id, &initialized_block)?;
+
                 return Ok(Some(block_id));
             }
         }

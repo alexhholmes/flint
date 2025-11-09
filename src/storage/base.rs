@@ -1,5 +1,6 @@
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use zerocopy::{IntoBytes, FromBytes, Immutable};
 
 /// Block size for I/O operations (64KB)
 pub const BLOCK_SIZE: usize = 64 * 1024;
@@ -74,6 +75,7 @@ impl TupleMeta {
 }
 
 /// Segment header (64KB at start of each segment)
+#[derive(IntoBytes, FromBytes, Immutable)]
 #[repr(C, align(4096))]
 pub struct SegmentHeader {
     /// Magic number for validation
@@ -122,18 +124,19 @@ impl SegmentHeader {
 }
 
 /// Block header for slotted page
+#[derive(IntoBytes, FromBytes, Immutable)]
 #[repr(C)]
 pub struct BlockHeader {
     /// Number of slots in this block
     pub slot_count: u16,
-    /// Offset to start of free space
-    pub free_start: u16,
-    /// Offset to end of free space (grows backward from end)
-    pub free_end: u16,
     /// Flags (compression, etc.)
     pub flags: u16,
+    /// Offset to start of free space
+    pub free_start: u32,
+    /// Offset to end of free space (grows backward from end)
+    pub free_end: u32,
     /// Reserved for future use
-    pub reserved: [u8; 8],
+    pub reserved: [u8; 4],
 }
 
 const BLOCK_HEADER_SIZE: usize = 16;
@@ -142,10 +145,10 @@ impl BlockHeader {
     pub fn new() -> Self {
         BlockHeader {
             slot_count: 0,
-            free_start: BLOCK_HEADER_SIZE as u16,
-            free_end: BLOCK_SIZE as u16,
             flags: 0,
-            reserved: [0; 8],
+            free_start: BLOCK_HEADER_SIZE as u32,
+            free_end: BLOCK_SIZE as u32,
+            reserved: [0; 4],
         }
     }
 
@@ -242,16 +245,16 @@ impl Block {
         }
 
         // Allocate from end (tuple data)
-        let new_free_end = free_end - data_space as u16;
+        let new_free_end = free_end - data_space as u32;
         self.data[new_free_end as usize..free_end as usize].copy_from_slice(data);
 
         // Create slot entry
-        *self.slot_mut(slot_id) = SlotEntry::new(new_free_end, data.len() as u16);
+        *self.slot_mut(slot_id) = SlotEntry::new(new_free_end as u16, data.len() as u16);
 
         // Update header
         let header = self.header_mut();
         header.slot_count += 1;
-        header.free_start += SLOT_ENTRY_SIZE as u16;
+        header.free_start += SLOT_ENTRY_SIZE as u32;
         header.free_end = new_free_end;
 
         Some(slot_id)

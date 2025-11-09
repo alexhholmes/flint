@@ -14,7 +14,7 @@ pub struct IndexPageHeader {
     /// True if this is a leaf node
     pub is_leaf: bool,
     /// Padding to align num_keys to 2-byte boundary
-    _padding1: u8,
+    _padding: u8,
     /// Number of keys in this node
     pub num_keys: u16,
     /// Sibling page pointers (for B+ tree leaf traversal)
@@ -33,7 +33,7 @@ impl IndexPageHeader {
         IndexPageHeader {
             magic: Self::MAGIC,
             is_leaf,
-            _padding1: 0,
+            _padding: 0,
             num_keys: 0,
             prev_page_id: 0,  // No previous sibling
             next_page_id: 0,  // No next sibling
