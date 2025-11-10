@@ -16,6 +16,8 @@
   <a href="https://github.com/flintdata/flint/blob/main/docs/changelog/CHANGELOG.md">Changelog</a>
 </h3>
 
+<br/>
+
 ---
 
 ## Use case
