@@ -38,11 +38,11 @@ jobs:
           echo "exit_code=$?" >> $GITHUB_OUTPUT
         continue-on-error: true
 
-      - name: Run tests with JSON output
-        id: run_tests
+      - name: Test
+        id: test
         if: steps.compile.outputs.exit_code == '0'
         run: |
-          # Run tests with JSON output only
+          # Run tests with suppressed warnings
           # The --format=json flag must be passed after -- to be sent to the test binary
           CARGO_TERM_COLOR=never RUSTFLAGS=-Awarnings cargo test > logs/test_output.json 2>&1
           
@@ -66,36 +66,13 @@ jobs:
               compileOutput = "Failed to read compilation output: " + error.message;
             }
             
-            // Read the JSON test output file
+            // Read the test output file
             let testOutput = "";
-            let testJsonOutput = [];
             try {
               testOutput = fs.readFileSync('logs/test_output.json', 'utf8');
-              console.log("Successfully read test JSON logs");
-            
-              // Print the first 500 characters to debug
-              console.log("Test output preview:", testOutput.substring(0, 500));
-            
-              // Try to parse the JSON output
-              try {
-                // The output might contain multiple JSON objects, one per line
-                testJsonOutput = testOutput.trim().split('\n')
-                  .filter(line => line.trim().startsWith('{'))
-                  .map(line => {
-                    try { return JSON.parse(line); } 
-                    catch (e) { 
-                      console.log("Failed to parse JSON line:", line.substring(0, 100));
-                      return null; 
-                    }
-                  })
-                  .filter(obj => obj !== null);
-            
-                console.log(`Found ${testJsonOutput.length} valid JSON objects in test output`);
-              } catch (parseError) {
-                console.log("Error parsing JSON test output:", parseError);
-              }
+              console.log("Successfully read test logs");
             } catch (error) {
-              console.log("Error reading test JSON logs:", error);
+              console.log("Error reading test logs:", error);
               testOutput = "Failed to read test output: " + error.message;
             }
             
@@ -124,8 +101,7 @@ jobs:
               compile_success: compileSuccess,
               test_success: testSuccess,
               compile_output: compileOutput,
-              test_output_raw: testOutput,
-              test_output_json: testJsonOutput.length > 0 ? testJsonOutput : null,
+              test_output: testOutput,
               commit_message: context.payload.head_commit ? context.payload.head_commit.message : 'No commit message available',
               branch: context.ref.replace('refs/heads/', '')
             };
