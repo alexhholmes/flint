@@ -8,7 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  ELASTICSEARCH_URL: ${{ secrets.ELASTICSEARCH_ENDPOINT }}
+  ELASTICSEARCH_URL: "https://your-elasticsearch-endpoint:9200"
   ELASTICSEARCH_INDEX: "flint-workflow-logs"
 
 jobs:
@@ -30,12 +30,15 @@ jobs:
       - name: Run tests
         id: run_tests
         run: |
-          # Run tests and capture output to a file
+          # Run tests with headless output and capture to a file
           mkdir -p test_logs
-          cargo test > test_logs/test_output.log 2>&1 || echo "Tests failed but continuing to capture logs"
           
-          # Save the exit code to determine success/failure
-          echo "::set-output name=exit_code::$?"
+          # Use --no-capture to get all output, --color never to disable colors
+          # and --format=plain for plain text output without terminal formatting
+          CARGO_TERM_COLOR=never cargo test -- --no-capture --color never --format=plain > test_logs/test_output.log 2>&1 || echo "Tests failed but continuing to capture logs"
+          
+          # Save the exit code
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
         continue-on-error: true
 
       - name: Send logs to Elasticsearch
@@ -101,4 +104,3 @@ jobs:
       - name: Check test results
         if: steps.run_tests.outputs.exit_code != '0'
         run: exit 1
-
