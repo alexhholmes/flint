@@ -11,7 +11,7 @@ env:
 
 jobs:
   test:
-    runs-on: big-runner-linux-x64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
