@@ -38,15 +38,13 @@ jobs:
           echo "exit_code=$?" >> $GITHUB_OUTPUT
         continue-on-error: true
 
-      - name: Test
-        id: test
+      - name: Run tests with JSON output
+        id: run_tests
         if: steps.compile.outputs.exit_code == '0'
         run: |
-          # Run tests with JSON output and capture to a file
-          CARGO_TERM_COLOR=never cargo test -- --no-capture --color never --format=json > logs/test_output.json 2>&1 || echo "Tests failed but continuing to capture logs"
-          
-          # Also capture a human-readable version for the workflow logs
-          CARGO_TERM_COLOR=never cargo test > logs/test_output.log 2>&1 || echo "Tests failed but continuing to capture logs"
+          # Run tests with JSON output only
+          # The --format=json flag must be passed after -- to be sent to the test binary
+          CARGO_TERM_COLOR=never cargo test -- --format=json > logs/test_output.json 2>&1
           
           # Save the exit code
           echo "exit_code=$?" >> $GITHUB_OUTPUT
@@ -69,10 +67,14 @@ jobs:
             }
             
             // Read the JSON test output file
+            let testOutput = "";
             let testJsonOutput = [];
             try {
-              const testOutput = fs.readFileSync('logs/test_output.json', 'utf8');
+              testOutput = fs.readFileSync('logs/test_output.json', 'utf8');
               console.log("Successfully read test JSON logs");
+            
+              // Print the first 500 characters to debug
+              console.log("Test output preview:", testOutput.substring(0, 500));
             
               // Try to parse the JSON output
               try {
@@ -81,24 +83,20 @@ jobs:
                   .filter(line => line.trim().startsWith('{'))
                   .map(line => {
                     try { return JSON.parse(line); } 
-                    catch (e) { return null; }
+                    catch (e) { 
+                      console.log("Failed to parse JSON line:", line.substring(0, 100));
+                      return null; 
+                    }
                   })
                   .filter(obj => obj !== null);
+            
+                console.log(`Found ${testJsonOutput.length} valid JSON objects in test output`);
               } catch (parseError) {
                 console.log("Error parsing JSON test output:", parseError);
               }
             } catch (error) {
               console.log("Error reading test JSON logs:", error);
-            }
-            
-            // Read the plain text test log
-            let testPlainOutput = "";
-            try {
-              testPlainOutput = fs.readFileSync('logs/test_output.log', 'utf8');
-              console.log("Successfully read test plain logs");
-            } catch (error) {
-              console.log("Error reading test plain logs:", error);
-              testPlainOutput = "Failed to read test plain output: " + error.message;
+              testOutput = "Failed to read test output: " + error.message;
             }
             
             // Determine overall status
@@ -126,8 +124,8 @@ jobs:
               compile_success: compileSuccess,
               test_success: testSuccess,
               compile_output: compileOutput,
-              test_output_raw: testPlainOutput,
-              test_output_json: testJsonOutput,
+              test_output_raw: testOutput,
+              test_output_json: testJsonOutput.length > 0 ? testJsonOutput : null,
               commit_message: context.payload.head_commit ? context.payload.head_commit.message : 'No commit message available',
               branch: context.ref.replace('refs/heads/', '')
             };
