@@ -8,15 +8,14 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  ELASTICSEARCH_URL: ${{ secrets.ELASTICSEARCH_ENDPOINT }}
+  ELASTICSEARCH_INDEX: "flint-workflow-logs"
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-
-
       - uses: actions/cache@v4
         with:
           path: |
@@ -29,4 +28,66 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Run tests
+        id: run_tests
         run: cargo test
+        continue-on-error: true
+
+      - name: Send logs to Elasticsearch
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // Get test output
+            const testOutput = process.env.GITHUB_STEP_SUMMARY || 'No test output available';
+            
+            // Create log document
+            const logDocument = {
+              repository: context.repo.repo,
+              owner: context.repo.owner,
+              workflow_name: context.workflow,
+              job_name: context.job,
+              run_id: context.runId,
+              run_number: context.runNumber,
+              sha: context.sha,
+              ref: context.ref,
+              event_name: context.eventName,
+              actor: context.actor,
+              timestamp: new Date().toISOString(),
+              status: ${{ steps.run_tests.outcome == 'success' }} ? 'success' : 'failure',
+              test_output: testOutput,
+              commit_message: context.payload.head_commit ? context.payload.head_commit.message : 'No commit message available',
+              branch: context.ref.replace('refs/heads/', '')
+            };
+            
+            // Send to Elasticsearch
+            try {
+              const response = await fetch(`${process.env.ELASTICSEARCH_URL}/${process.env.ELASTICSEARCH_INDEX}/_doc`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  // Use API key authentication - store this securely in GitHub secrets
+                  'Authorization': `ApiKey ${process.env.ELASTICSEARCH_API_KEY}`
+                },
+                body: JSON.stringify(logDocument)
+              });
+            
+              if (!response.ok) {
+                const errorText = await response.text();
+                core.setFailed(`Failed to send logs to Elasticsearch: ${response.status} ${errorText}`);
+              } else {
+                console.log('Successfully sent logs to Elasticsearch');
+              }
+            } catch (error) {
+              core.setFailed(`Error sending logs to Elasticsearch: ${error.message}`);
+            }
+        env:
+          # Store API key in GitHub secrets
+          ELASTICSEARCH_API_KEY: ${{ secrets.ELASTICSEARCH_API_KEY }}
+
+      # This ensures the workflow fails if the tests failed
+      - name: Check test results
+        if: steps.run_tests.outcome != 'success'
+        run: exit 1
+
+
