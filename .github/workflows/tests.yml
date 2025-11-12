@@ -38,8 +38,8 @@ jobs:
           echo "exit_code=$?" >> $GITHUB_OUTPUT
         continue-on-error: true
 
-      - name: Run tests
-        id: run_tests
+      - name: Test
+        id: test
         if: steps.compile.outputs.exit_code == '0'
         run: |
           # Run tests with JSON output and capture to a file
