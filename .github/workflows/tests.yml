@@ -106,27 +106,56 @@ jobs:
               branch: context.ref.replace('refs/heads/', '')
             };
             
-            // Send to Elasticsearch
-            try {
-              console.log("Sending logs to Elasticsearch...");
-              const response = await fetch(`${process.env.ELASTICSEARCH_URL}/${process.env.ELASTICSEARCH_INDEX}/_doc`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `ApiKey ${process.env.ELASTICSEARCH_API_KEY}`
-                },
-                body: JSON.stringify(logDocument)
-              });
-            
-              if (!response.ok) {
-                const errorText = await response.text();
-                core.setFailed(`Failed to send logs to Elasticsearch: ${response.status} ${errorText}`);
-              } else {
-                console.log('Successfully sent logs to Elasticsearch');
+            // Retry logic for Elasticsearch upload with exponential backoff
+            async function uploadWithRetry(logDoc, maxRetries = 5, initialDelayMs = 500) {
+              let lastError;
+              for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                  console.log(`Sending logs to Elasticsearch (attempt ${attempt}/${maxRetries})...`);
+                  const response = await fetch(`${process.env.ELASTICSEARCH_URL}/${process.env.ELASTICSEARCH_INDEX}/_doc`, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `ApiKey ${process.env.ELASTICSEARCH_API_KEY}`
+                    },
+                    body: JSON.stringify(logDoc)
+                  });
+
+                  if (response.ok) {
+                    console.log('Successfully sent logs to Elasticsearch');
+                    return true;
+                  }
+
+                  const errorText = await response.text();
+                  lastError = `HTTP ${response.status}: ${errorText}`;
+
+                  if (attempt === maxRetries) {
+                    core.setFailed(`Failed to send logs to Elasticsearch after ${maxRetries} attempts: ${lastError}`);
+                    return false;
+                  }
+
+                  // Exponential backoff: 500ms, 1s, 2s, 4s, 8s
+                  const delayMs = initialDelayMs * Math.pow(2, attempt - 1);
+                  console.log(`Attempt ${attempt} failed. Retrying in ${delayMs}ms...`);
+                  await new Promise(resolve => setTimeout(resolve, delayMs));
+                } catch (error) {
+                  lastError = error.message;
+
+                  if (attempt === maxRetries) {
+                    core.setFailed(`Failed to send logs to Elasticsearch after ${maxRetries} attempts: ${lastError}`);
+                    return false;
+                  }
+
+                  // Exponential backoff: 500ms, 1s, 2s, 4s, 8s
+                  const delayMs = initialDelayMs * Math.pow(2, attempt - 1);
+                  console.log(`Attempt ${attempt} failed. Retrying in ${delayMs}ms...`);
+                  await new Promise(resolve => setTimeout(resolve, delayMs));
+                }
               }
-            } catch (error) {
-              core.setFailed(`Error sending logs to Elasticsearch: ${error.message}`);
             }
+
+            // Send to Elasticsearch with exponential backoff retries
+            await uploadWithRetry(logDocument);
         env:
           ELASTICSEARCH_API_KEY: ${{ secrets.ELASTICSEARCH_API_KEY }}
 
