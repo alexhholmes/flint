@@ -1,3 +1,4 @@
+
 name: Tests
 
 on:
@@ -8,14 +9,13 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  ELASTICSEARCH_URL: ${{ secrets.ELASTICSEARCH_ENDPOINT }}
-  ELASTICSEARCH_INDEX: "flint-workflow-logs"
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/cache@v4
         with:
           path: |
@@ -27,150 +27,6 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Compile
-        id: compile
-        run: |
-          # Compile only without running tests and capture output
-          mkdir -p logs
-          CARGO_TERM_COLOR=never cargo build --tests > logs/compile_output.log 2>&1
-          
-          # Save the exit code
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
-        continue-on-error: true
-
-      - name: Test
-        id: test
-        if: steps.compile.outputs.exit_code == '0'
-        run: |
-          # Run tests with suppressed warnings
-          # The --format=json flag must be passed after -- to be sent to the test binary
-          CARGO_TERM_COLOR=never RUSTFLAGS=-Awarnings cargo test > logs/test_output.json 2>&1
-          
-          # Save the exit code
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
-        continue-on-error: true
-
-      - name: Send logs to Elasticsearch
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const fs = require('fs');
-            
-            // Read the compilation output
-            let compileOutput = "";
-            try {
-              compileOutput = fs.readFileSync('logs/compile_output.log', 'utf8');
-              console.log("Successfully read compilation logs");
-            } catch (error) {
-              console.log("Error reading compilation logs:", error);
-              compileOutput = "Failed to read compilation output: " + error.message;
-            }
-            
-            // Read the test output file
-            let testOutput = "";
-            try {
-              testOutput = fs.readFileSync('logs/test_output.json', 'utf8');
-              console.log("Successfully read test logs");
-            } catch (error) {
-              console.log("Error reading test logs:", error);
-              testOutput = "Failed to read test output: " + error.message;
-            }
-            
-            // Determine overall status
-            const compileSuccess = ${{ steps.compile.outputs.exit_code == '0' }};
-            const testSuccess = ${{ steps.test.outputs.exit_code == '0' }};
-            const overallStatus = compileSuccess && testSuccess ? 'success' : 'failure';
-            const failureReason = !compileSuccess ? 'compilation_failure' : 
-                                 !testSuccess ? 'test_failure' : null;
-            
-            // Create log document
-            const logDocument = {
-              repository: context.repo.repo,
-              owner: context.repo.owner,
-              workflow_name: context.workflow,
-              job_name: context.job,
-              run_id: context.runId,
-              run_number: context.runNumber,
-              sha: context.sha,
-              ref: context.ref,
-              event_name: context.eventName,
-              actor: context.actor,
-              timestamp: new Date().toISOString(),
-              status: overallStatus,
-              failure_reason: failureReason,
-              compile_success: compileSuccess,
-              test_success: testSuccess,
-              compile_output: compileOutput,
-              test_output: testOutput,
-              commit_message: context.payload.head_commit ? context.payload.head_commit.message : 'No commit message available',
-              branch: context.ref.replace('refs/heads/', '')
-            };
-            
-            // Retry logic for Elasticsearch upload with exponential backoff
-            async function uploadWithRetry(logDoc, maxRetries = 5, initialDelayMs = 500) {
-              let lastError;
-              for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                try {
-                  console.log(`Sending logs to Elasticsearch (attempt ${attempt}/${maxRetries})...`);
-                  const response = await fetch(`${process.env.ELASTICSEARCH_URL}/${process.env.ELASTICSEARCH_INDEX}/_doc`, {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'Authorization': `ApiKey ${process.env.ELASTICSEARCH_API_KEY}`
-                    },
-                    body: JSON.stringify(logDoc)
-                  });
-
-                  if (response.ok) {
-                    console.log('Successfully sent logs to Elasticsearch');
-                    return true;
-                  }
-
-                  const errorText = await response.text();
-                  lastError = `HTTP ${response.status}: ${errorText}`;
-
-                  if (attempt === maxRetries) {
-                    core.setFailed(`Failed to send logs to Elasticsearch after ${maxRetries} attempts: ${lastError}`);
-                    return false;
-                  }
-
-                  // Exponential backoff: 500ms, 1s, 2s, 4s, 8s
-                  const delayMs = initialDelayMs * Math.pow(2, attempt - 1);
-                  console.log(`Attempt ${attempt} failed. Retrying in ${delayMs}ms...`);
-                  await new Promise(resolve => setTimeout(resolve, delayMs));
-                } catch (error) {
-                  lastError = error.message;
-
-                  if (attempt === maxRetries) {
-                    core.setFailed(`Failed to send logs to Elasticsearch after ${maxRetries} attempts: ${lastError}`);
-                    return false;
-                  }
-
-                  // Exponential backoff: 500ms, 1s, 2s, 4s, 8s
-                  const delayMs = initialDelayMs * Math.pow(2, attempt - 1);
-                  console.log(`Attempt ${attempt} failed. Retrying in ${delayMs}ms...`);
-                  await new Promise(resolve => setTimeout(resolve, delayMs));
-                }
-              }
-            }
-
-            // Send to Elasticsearch with exponential backoff retries
-            await uploadWithRetry(logDocument);
-        env:
-          ELASTICSEARCH_API_KEY: ${{ secrets.ELASTICSEARCH_API_KEY }}
-
-      # This ensures the workflow fails if either compilation or tests failed
-      - name: Check results
-        run: |
-          COMPILE_EXIT="${{ steps.compile.outputs.exit_code }}"
-          TEST_EXIT="${{ steps.test.outputs.exit_code }}"
-
-          if [ -z "$COMPILE_EXIT" ] || [ "$COMPILE_EXIT" != "0" ]; then
-            echo "Compilation failed with exit code: $COMPILE_EXIT"
-            exit 1
-          fi
-
-          if [ -z "$TEST_EXIT" ] || [ "$TEST_EXIT" != "0" ]; then
-            echo "Tests failed with exit code: $TEST_EXIT"
-            exit 1
-          fi
+      - name: Run tests
+        run: cargo test
+        
